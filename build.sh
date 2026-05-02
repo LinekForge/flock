@@ -28,6 +28,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$SRC/Info.plist" "$APP/Contents/"
 echo -n "APPL????" > "$APP/Contents/PkgInfo"
+[ -f "$SRC/AppIcon.icns" ] && cp "$SRC/AppIcon.icns" "$APP/Contents/Resources/"
 
 # 5. Bundle web dist
 if [ -d "$WEB_DIR/dist" ]; then
