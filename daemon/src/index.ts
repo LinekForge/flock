@@ -345,9 +345,9 @@ function flushNotify(agentId: string) {
   for (const [convId, count] of counts) {
     const conv = conversations.get(convId);
     const name = conv?.name || convId;
-    parts.push(`#${name}: ${count} new message${count > 1 ? "s" : ""}`);
+    parts.push(`#${name} (id:${convId}): ${count} new`);
   }
-  agent.notify(`[New messages] ${parts.join(", ")}. Use check_messages to read them.`);
+  agent.notify(`[New messages] ${parts.join(", ")}. Use check_messages(conversationId="...") to read and reply directly.`);
 }
 
 function getConversationList(): ConversationInfo[] {

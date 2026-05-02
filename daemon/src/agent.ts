@@ -243,6 +243,7 @@ export class Agent extends EventEmitter {
     this.flushTextBuffer();
     this.setState("stopped");
     if (this.compactionTimer) { clearTimeout(this.compactionTimer); this.compactionTimer = null; }
+    if (this.stallTimer) { clearInterval(this.stallTimer); this.stallTimer = null; }
   }
 
   private isAlive(): boolean {
