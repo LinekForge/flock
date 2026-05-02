@@ -342,6 +342,7 @@ export function ChatArea() {
 
   const handleSend = () => {
     if (pendingFile) {
+      if (!activeConvId) { setPendingFile(null); return; }
       if (pendingFile.type.startsWith("image/")) {
         const base64 = pendingFile.data.split(",")[1];
         const { ws } = useStore.getState();
