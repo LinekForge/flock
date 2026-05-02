@@ -311,6 +311,8 @@ export function ChatArea() {
   };
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
+  const justEndedComposingRef = useRef(false);
 
   const updateInput = (val: string) => {
     if (draftKey) setDrafts((prev) => ({ ...prev, [draftKey]: val }));
@@ -597,8 +599,10 @@ export function ChatArea() {
                 setShowMentions(lastChar === "@" && (beforeLast === "" || beforeLast === " "));
               }
             }}
+            onCompositionStart={() => { composingRef.current = true; justEndedComposingRef.current = false; }}
+            onCompositionEnd={() => { composingRef.current = false; justEndedComposingRef.current = true; setTimeout(() => { justEndedComposingRef.current = false; }, 0); }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !composingRef.current && !justEndedComposingRef.current) {
                 e.preventDefault();
                 handleSend();
               }
