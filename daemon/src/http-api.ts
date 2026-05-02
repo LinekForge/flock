@@ -199,12 +199,11 @@ async function handleSend(req: Request, ctx: ApiContext, headers: HeadersInit) {
     for (const otherId of otherAgentIds) {
       const other = ctx.agents.get(otherId);
       if (other) {
-        const envelope = `[Channel #${conv.name}] ${senderName}: ${text}\n\nYou are in this channel — just reply directly, no need to call send_message.`;
         if (other.getState() === "idle" || other.getState() === "stopped") {
-          ctx.deliverToAgent(otherId, envelope, conversationId);
+          ctx.deliverToAgent(otherId, `[Channel #${conv.name}] New message from ${senderName}. Use check_messages to read.`, conversationId);
         } else {
           ctx.setAgentConv(otherId, conversationId);
-          other.notify(envelope);
+          other.notify(`[New messages] #${conv.name}: 1 new message. Use check_messages to read.`);
         }
       }
     }

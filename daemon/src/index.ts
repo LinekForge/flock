@@ -36,6 +36,10 @@ let messageSeq = 0;
 let approvalTimeoutMs = 60000;
 const messagePersistQueues = new Map<string, Promise<void>>();
 let shuttingDown = false;
+const agentsStarting = new Set<string>();
+const startingInboxes = new Map<string, { text: string; convId: string }[]>();
+const notifyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingNotifyCounts = new Map<string, Map<string, number>>();
 
 const AGENT_NAME_PATTERN = /^[A-Za-z0-9_\-\u4E00-\u9FFF]+$/u;
 
@@ -278,8 +282,7 @@ function createAgent(config: AgentConfig, sessionId?: string): Agent {
         for (const otherId of otherAgentIds) {
           const other = agents.get(otherId);
           if (other && other.getState() !== "idle" && other.getState() !== "stopped") {
-            activeAgentConv.set(otherId, targetConvId);
-            other.notify(`[Channel #${conv.name}] ${config.name}: ${msg.content}\n\nYou are in this channel — just reply directly, no need to call send_message.`);
+            queueNotify(otherId, targetConvId, conv.name);
           }
         }
       }
@@ -319,6 +322,34 @@ function getAgentList() {
   }));
 }
 
+function queueNotify(agentId: string, convId: string, _convName?: string) {
+  const agent = agents.get(agentId);
+  if (!agent || agent.getState() === "idle" || agent.getState() === "stopped") return;
+  activeAgentConv.set(agentId, convId);
+  if (!pendingNotifyCounts.has(agentId)) pendingNotifyCounts.set(agentId, new Map());
+  const counts = pendingNotifyCounts.get(agentId)!;
+  counts.set(convId, (counts.get(convId) || 0) + 1);
+  if (!notifyTimers.has(agentId)) {
+    notifyTimers.set(agentId, setTimeout(() => flushNotify(agentId), 1000));
+  }
+}
+
+function flushNotify(agentId: string) {
+  notifyTimers.delete(agentId);
+  const counts = pendingNotifyCounts.get(agentId);
+  pendingNotifyCounts.delete(agentId);
+  if (!counts || counts.size === 0) return;
+  const agent = agents.get(agentId);
+  if (!agent || agent.getState() === "idle" || agent.getState() === "stopped") return;
+  const parts: string[] = [];
+  for (const [convId, count] of counts) {
+    const conv = conversations.get(convId);
+    const name = conv?.name || convId;
+    parts.push(`#${name}: ${count} new message${count > 1 ? "s" : ""}`);
+  }
+  agent.notify(`[New messages] ${parts.join(", ")}. Use check_messages to read them.`);
+}
+
 function getConversationList(): ConversationInfo[] {
   return Array.from(conversations.values()).map((c) => ({
     id: c.id,
@@ -333,8 +364,26 @@ function deliverToAgent(agentId: string, text: string, convId: string) {
   const agent = agents.get(agentId);
   if (!agent) return;
   activeAgentConv.set(agentId, convId);
+  if (agentsStarting.has(agentId)) {
+    const inbox = startingInboxes.get(agentId) || [];
+    inbox.push({ text, convId });
+    startingInboxes.set(agentId, inbox);
+    return;
+  }
   if (agent.getState() === "idle" || agent.getState() === "stopped") {
+    agentsStarting.add(agentId);
     agent.start(text);
+    agent.once("status", () => {
+      agentsStarting.delete(agentId);
+      const queued = startingInboxes.get(agentId);
+      startingInboxes.delete(agentId);
+      if (queued) {
+        for (const msg of queued) {
+          activeAgentConv.set(agentId, msg.convId);
+          agent.deliver(msg.text);
+        }
+      }
+    });
   } else {
     agent.deliver(text);
   }
@@ -550,13 +599,8 @@ wss.on("connection", (ws: WebSocket) => {
           }
 
           const otherAgentIds = conv.agentIds.filter((id) => !route.targetAgentIds.includes(id));
-          const primaryName = route.targetAgentIds.map((id) => agents.get(id)?.config.name || id).join(", ");
           for (const agentId of otherAgentIds) {
-            const agent = agents.get(agentId);
-            if (agent && agent.getState() !== "idle" && agent.getState() !== "stopped") {
-              activeAgentConv.set(agentId, msg.conversationId);
-              agent.notify(`[Channel #${conv.name}] User: ${msg.text}\n\n${primaryName} is responding. Just reply directly if you have something important to add.`);
-            }
+            queueNotify(agentId, msg.conversationId, conv.name);
           }
         }
         break;

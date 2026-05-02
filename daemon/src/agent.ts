@@ -62,6 +62,12 @@ export class Agent extends EventEmitter {
   private compactionTimer: ReturnType<typeof setTimeout> | null = null;
   private textBuffer = "";
   private textFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private exitCode: number | null = null;
+  private exitSignal: string | null = null;
+  private lastEventAt = Date.now();
+  private stallTimer: ReturnType<typeof setInterval> | null = null;
+  private recentStderr: string[] = [];
+  private toolBoundaryFlushDisabled = false;
 
   constructor(config: AgentConfig) {
     super();
@@ -124,17 +130,31 @@ export class Agent extends EventEmitter {
     });
 
     this.proc.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString().trim();
-      if (text) {
-        if (text.includes("No conversation found with session ID")) {
-          this.emitMessage("system", "Session not found, cold starting...");
-          this.sessionId = null;
-          this.proc?.kill("SIGTERM");
-          setTimeout(() => this.start(initialPrompt), 1000);
-          return;
-        }
-        this.emitMessage("system", text);
+      const raw = chunk.toString().trim();
+      if (!raw) return;
+      const lines = raw.split("\n").filter(Boolean);
+      for (const line of lines) {
+        this.recentStderr.push(line.length > 240 ? line.slice(0, 240) + "..." : line);
+        if (this.recentStderr.length > 8) this.recentStderr.shift();
       }
+      if (raw.includes("No conversation found with session ID")) {
+        this.emitMessage("system", "Session not found, cold starting...");
+        this.sessionId = null;
+        this.proc?.kill("SIGTERM");
+        setTimeout(() => this.start(initialPrompt), 1000);
+        return;
+      }
+      if (this.isTerminalFailure(raw)) {
+        this.emitMessage("system", `Terminal failure: ${lines[0]}`);
+        this.stop();
+        return;
+      }
+      this.emitMessage("system", lines[0]);
+    });
+
+    this.proc.on("exit", (code: number | null, signal: string | null) => {
+      this.exitCode = code;
+      this.exitSignal = signal;
     });
 
     this.proc.on("close", () => {
@@ -144,9 +164,12 @@ export class Agent extends EventEmitter {
       this.outstandingToolUses = 0;
       this.currentActivity = "";
       if (this.compactionTimer) { clearTimeout(this.compactionTimer); this.compactionTimer = null; }
+      if (this.stallTimer) { clearInterval(this.stallTimer); this.stallTimer = null; }
     });
 
     this.setState("running");
+    this.lastEventAt = Date.now();
+    this.stallTimer = setInterval(() => this.checkStall(), 60_000);
 
     if (initialPrompt) {
       this.deliver(initialPrompt);
@@ -185,6 +208,31 @@ export class Agent extends EventEmitter {
       return;
     }
     this.sendDelivery(delivery);
+  }
+
+  private isTerminalFailure(text: string): boolean {
+    const lower = text.toLowerCase();
+    return lower.includes("usage limit") || lower.includes("quota exceeded")
+      || lower.includes("budget limit exceeded") || lower.includes("model not found")
+      || lower.includes("model deprecated") || lower.includes("usage not included");
+  }
+
+  private checkStall() {
+    if (!["running", "thinking", "tool_use"].includes(this.state)) return;
+    const stalledMs = Date.now() - this.lastEventAt;
+    if (stalledMs > 5 * 60 * 1000) {
+      const mins = Math.max(1, Math.floor(stalledMs / 60_000));
+      this.emitMessage("system", `Runtime stalled: no events for ${mins}m`);
+      this.emit("status", { agentId: this.config.id, state: "error" as any, activity: `Stalled (${mins}m)` });
+    }
+  }
+
+  private finishCompactionIfActive() {
+    if (this.compactionTimer) {
+      clearTimeout(this.compactionTimer);
+      this.compactionTimer = null;
+      this.emitMessage("system", "Compaction complete (inferred).");
+    }
   }
 
   stop() {
@@ -331,6 +379,9 @@ send_message 用于两种情况：
 - 其他人不抢总结动作
 如果没有指定主持人，谁开的话题谁负责收尾
 
+### 消息通知
+当你收到"[New messages] #频道: N new messages"这类通知时，用 check_messages 查看消息内容，然后决定是否回复。通知本身不包含消息正文——你需要主动拉取。
+
 ### 工具
 你有 send_message / check_messages / read_history / search_messages / list_conversations / schedule_reminder / list_tasks / create_task / claim_task / upload_file 等工具。用它们主动协作，不要等别人来问你。
 `;
@@ -357,6 +408,8 @@ send_message 用于两种情况：
   }
 
   private handleDriverEvent(event: DriverEvent) {
+    this.lastEventAt = Date.now();
+
     switch (event.kind) {
       case "session_init":
         this.flushTextBuffer();
@@ -366,12 +419,14 @@ send_message 用于两种情况：
         break;
 
       case "text":
+        this.finishCompactionIfActive();
         this.currentActivity = "";
         this.setState("running");
         this.queueText(event.text);
         break;
 
       case "thinking":
+        this.finishCompactionIfActive();
         this.flushTextBuffer();
         this.currentActivity = "Thinking...";
         this.setState("thinking");
@@ -379,6 +434,7 @@ send_message 用于两种情况：
         break;
 
       case "tool_call":
+        this.finishCompactionIfActive();
         this.flushTextBuffer();
         this.outstandingToolUses++;
         this.currentActivity = event.name;
@@ -389,7 +445,7 @@ send_message 用于两种情况：
       case "tool_output":
         this.flushTextBuffer();
         this.outstandingToolUses = Math.max(0, this.outstandingToolUses - 1);
-        if (this.outstandingToolUses === 0 && this.pendingDeliveries.length > 0) {
+        if (this.outstandingToolUses === 0 && this.pendingDeliveries.length > 0 && !this.toolBoundaryFlushDisabled) {
           this.isBusy = false;
           this.flushPending();
         }
@@ -432,6 +488,10 @@ send_message 用于两种情况：
 
       case "error":
         this.flushTextBuffer();
+        if (/thinking.*redacted_thinking|redacted_thinking.*thinking/i.test(event.message) && /cannot be modified/i.test(event.message)) {
+          this.toolBoundaryFlushDisabled = true;
+          this.emitMessage("system", "Tool boundary flush disabled (thinking block mutation error)");
+        }
         this.emitMessage("system", event.message);
         break;
     }
