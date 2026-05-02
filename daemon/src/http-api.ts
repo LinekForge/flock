@@ -23,6 +23,7 @@ interface ApiContext {
   messageHistory: Map<string, any[]>;
   pendingApprovals: Map<string, PendingApproval>;
   deliverToAgent: (agentId: string, text: string, convId: string) => void;
+  setAgentConv: (agentId: string, convId: string) => void;
   storeMessage: (convId: string, msg: any) => any;
   broadcast: (msg: any) => void;
   persistState: () => Promise<void>;
@@ -202,6 +203,7 @@ async function handleSend(req: Request, ctx: ApiContext, headers: HeadersInit) {
         if (other.getState() === "idle" || other.getState() === "stopped") {
           ctx.deliverToAgent(otherId, envelope, conversationId);
         } else {
+          ctx.setAgentConv(otherId, conversationId);
           other.notify(envelope);
         }
       }

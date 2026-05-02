@@ -278,6 +278,7 @@ function createAgent(config: AgentConfig, sessionId?: string): Agent {
         for (const otherId of otherAgentIds) {
           const other = agents.get(otherId);
           if (other && other.getState() !== "idle" && other.getState() !== "stopped") {
+            activeAgentConv.set(otherId, targetConvId);
             other.notify(`[Channel #${conv.name}] ${config.name}: ${msg.content}\n\nYou are in this channel — just reply directly, no need to call send_message.`);
           }
         }
@@ -553,6 +554,7 @@ wss.on("connection", (ws: WebSocket) => {
           for (const agentId of otherAgentIds) {
             const agent = agents.get(agentId);
             if (agent && agent.getState() !== "idle" && agent.getState() !== "stopped") {
+              activeAgentConv.set(agentId, msg.conversationId);
               agent.notify(`[Channel #${conv.name}] User: ${msg.text}\n\n${primaryName} is responding. Just reply directly if you have something important to add.`);
             }
           }
@@ -778,6 +780,7 @@ createHttpApi({
   messageHistory,
   pendingApprovals,
   deliverToAgent,
+  setAgentConv: (agentId: string, convId: string) => activeAgentConv.set(agentId, convId),
   storeMessage,
   broadcast,
   persistState,
