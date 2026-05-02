@@ -276,6 +276,7 @@ export function ChatArea() {
   const [showPinned, setShowPinned] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [pendingFile, setPendingFile] = useState<{ name: string; type: string; data: string } | null>(null);
   const pinnedMessages = messages.filter((m) => m.pinned);
 
   const toggleSelect = (id: string) => {
@@ -340,6 +341,26 @@ export function ChatArea() {
   }, []);
 
   const handleSend = () => {
+    if (pendingFile) {
+      if (pendingFile.type.startsWith("image/")) {
+        const base64 = pendingFile.data.split(",")[1];
+        const { ws } = useStore.getState();
+        const agentId = convAgents[0]?.id;
+        if (ws && agentId) {
+          const clientMsgId = makeClientMsgId("img");
+          ws.send(JSON.stringify({ type: "agent:send-image", agentId, conversationId: activeConvId, fileName: pendingFile.name, mediaType: pendingFile.type, base64, clientMsgId }));
+          const userMsg = { id: clientMsgId, clientMsgId, type: "user" as const, content: `[Image: ${pendingFile.name}]`, conversationId: activeConvId, timestamp: Date.now() };
+          useStore.setState((s) => ({ messages: { ...s.messages, [activeConvId]: [...(s.messages[activeConvId] || []), userMsg] } }));
+        }
+      } else {
+        const preview = pendingFile.data.length > 5000 ? pendingFile.data.slice(0, 5000) + "\n...(truncated)" : pendingFile.data;
+        sendMessage(`[File: ${pendingFile.name}]\n\n${preview}`);
+      }
+      setPendingFile(null);
+      updateInput("");
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
+      return;
+    }
     const text = input.trim();
     if (!text) return;
     sendMessage(text);
@@ -470,31 +491,17 @@ export function ChatArea() {
           e.preventDefault();
           e.stopPropagation();
           const files = Array.from(e.dataTransfer.files);
-          for (const file of files) {
-            if (file.type.startsWith("image/")) {
-              const reader = new FileReader();
-              reader.onload = () => {
-                const base64 = (reader.result as string).split(",")[1];
-                const { ws } = useStore.getState();
-                const agentId = convAgents[0]?.id;
-                if (!ws || !agentId) return;
-                const clientMsgId = makeClientMsgId("img");
-                ws.send(JSON.stringify({ type: "agent:send-image", agentId, conversationId: activeConvId, fileName: file.name, mediaType: file.type, base64, clientMsgId }));
-                const userMsg = { id: clientMsgId, clientMsgId, type: "user" as const, content: `[Image: ${file.name}]`, conversationId: activeConvId, timestamp: Date.now() };
-                useStore.setState((s) => ({
-                  messages: { ...s.messages, [activeConvId]: [...(s.messages[activeConvId] || []), userMsg] },
-                }));
-              };
-              reader.readAsDataURL(file);
-            } else {
-              const reader = new FileReader();
-              reader.onload = () => {
-                const content = reader.result as string;
-                const preview = content.length > 5000 ? content.slice(0, 5000) + "\n...(truncated)" : content;
-                sendMessage(`[File: ${file.name}]\n\n${preview}`);
-              };
-              reader.readAsText(file);
-            }
+          const file = files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            setPendingFile({ name: file.name, type: file.type, data: reader.result as string });
+            textareaRef.current?.focus();
+          };
+          if (file.type.startsWith("image/")) {
+            reader.readAsDataURL(file);
+          } else {
+            reader.readAsText(file);
           }
         }}
       >
@@ -562,6 +569,15 @@ export function ChatArea() {
 
       {/* Input */}
       <div className="px-4 py-3 border-t-2 border-brutal-ink bg-white shrink-0 relative">
+        {pendingFile && (
+          <div className="mb-2 px-3 py-2 bg-brutal-cream border-2 border-brutal-ink rounded-lg flex items-center justify-between text-xs">
+            <div className="truncate font-semibold">
+              {pendingFile.type.startsWith("image/") ? "📷" : "📎"} {pendingFile.name}
+              <span className="font-normal text-gray-500 ml-2">Enter 发送 · Esc 取消</span>
+            </div>
+            <button onClick={() => setPendingFile(null)} className="ml-2 text-gray-400 hover:text-gray-600 shrink-0">&times;</button>
+          </div>
+        )}
         {replyingTo && replyingTo.conversationId === activeConvId && (
           <div className="mb-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between text-xs text-gray-500">
             <div className="truncate">
@@ -606,7 +622,7 @@ export function ChatArea() {
                 e.preventDefault();
                 handleSend();
               }
-              if (e.key === "Escape") setShowMentions(false);
+              if (e.key === "Escape") { setShowMentions(false); setPendingFile(null); }
             }}
           />
           <button

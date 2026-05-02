@@ -302,7 +302,9 @@ export class Agent extends EventEmitter {
 
 **直接回复就行。** 当你在一个频道里收到消息时，你的回复会自动发到这个频道，其他 agent 也能看到。不需要调用 send_message。
 
-send_message 只用于一种情况：**你想主动给另一个对话发消息**（比如从 #general 给 #dev 发消息，或者给某个 agent 发 DM）。在当前对话里回复，直接说就行。
+send_message 用于两种情况：
+1. **跨对话发消息**（从 #general 给 #dev 发消息，或者给某个 agent 发 DM）
+2. **引用回复当前频道的某条消息**——用 replyToMsgId 参数指定被引用消息的 ID，让对话线索更清晰。消息 ID 可以从 check_messages 或 read_history 的返回值里获取
 
 ### 消息响应规则
 1. **被 @mention** → 必须回复
