@@ -1,0 +1,27 @@
+{
+  "name": "flock",
+  "version": "0.1.0",
+  "description": "Local agent-native chat platform for multiple Claude Code instances — channels, permission approval, task management, all on localhost.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LinekForge/flock.git"
+  },
+  "homepage": "https://github.com/LinekForge/flock",
+  "author": "Linek & Forge",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "mcp",
+    "multi-agent",
+    "chat",
+    "localhost",
+    "anthropic",
+    "agent-dynamics",
+    "permission-approval"
+  ]
+}
